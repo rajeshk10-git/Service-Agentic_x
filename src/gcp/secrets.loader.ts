@@ -25,8 +25,11 @@ export async function loadSecretsFromManager(): Promise<void> {
       : `${secretRef}/versions/latest`;
     const [version] = await client.accessSecretVersion({ name });
     const payload = version.payload?.data;
-    if (payload) {
-      process.env[envKey] = payload.toString("utf8");
+    if (payload != null && payload !== "") {
+      process.env[envKey] =
+        typeof payload === "string"
+          ? payload
+          : Buffer.from(payload as Uint8Array).toString("utf8");
     }
   }
 }

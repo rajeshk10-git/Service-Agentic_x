@@ -10,7 +10,7 @@ interface ParseTaskBody {
   content_type?: string;
 }
 
-function authorizeTask(req: Request): boolean {
+function authorizeTask(req: Pick<Request, "headers">): boolean {
   if (!env.INTERNAL_TASKS_SECRET) {
     return false;
   }
