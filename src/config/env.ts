@@ -70,7 +70,11 @@ if (llmProvider === "google-ai") {
 
 export const env = {
   NODE_ENV: process.env.NODE_ENV ?? "development",
-  PORT: Number(process.env.PORT) || 3000,
+  /**
+   * Server listen port. Prefer APP_PORT; falls back to PORT (Cloud Run sets PORT).
+   */
+  APP_PORT:
+    Number(process.env.APP_PORT ?? process.env.PORT) || 3000,
   DATABASE_URL: required("DATABASE_URL"),
   LLM_PROVIDER: llmProvider,
   OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",

@@ -11,8 +11,8 @@ async function start(): Promise<void> {
     import("./app"),
   ]);
 
-  const server = app.listen(env.PORT, () => {
-    console.log(`Financial Wellness Agent listening on port ${env.PORT}`);
+  const server = app.listen(env.APP_PORT, () => {
+    console.log(`Financial Wellness Agent listening on port ${env.APP_PORT}`);
   });
 
   function shutdown(signal: string): void {

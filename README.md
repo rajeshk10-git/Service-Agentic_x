@@ -52,7 +52,7 @@ npm run build
 npm start
 ```
 
-Server listens on `PORT` (default `3000`).
+Server listens on `APP_PORT` (default `3000`; Cloud Run’s `PORT` is used as fallback if `APP_PORT` is unset).
 
 ## API
 

@@ -22,7 +22,7 @@
 # After first deploy, set env/secrets (DB, API keys) in console or:
 #   gcloud run services update ${_SERVICE} --region ${_LOCATION} \
 #     --set-secrets=DATABASE_URL=DATABASE_URL:latest \
-#     --set-env-vars=NODE_ENV=production,LLM_PROVIDER=gemini,PORT=8080
+#     --set-env-vars=NODE_ENV=production,LLM_PROVIDER=gemini,APP_PORT=8080
 
 substitutions:
   _LOCATION: us-central1
