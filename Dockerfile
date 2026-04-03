@@ -2,6 +2,8 @@
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
+# postinstall runs `prisma generate` — schema must exist before npm ci
+COPY prisma ./prisma
 RUN npm ci
 
 FROM node:20-bookworm-slim AS build
