@@ -1,0 +1,16 @@
+# Speed up `gcloud builds submit` (same idea as .dockerignore for upload context)
+.git
+.gitignore
+.gcloudignore
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+coverage
+.vscode
+.idea
+mcps
+*.md

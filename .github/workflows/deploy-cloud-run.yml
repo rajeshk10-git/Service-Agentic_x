@@ -1,0 +1,53 @@
+# Deploy via Cloud Build (same as cloudbuild.yaml) on push to main.
+#
+# GitHub → Settings → Secrets and variables → Actions
+#   Secrets:
+#     GCP_PROJECT_ID   — your GCP project id
+#     GCP_SA_KEY       — JSON key for a service account with at least:
+#                        Cloud Build Editor, Service Account User,
+#                        and permission for Cloud Build to push AR + deploy Run
+#                        (often: grant the Cloud Build default SA Run Admin + AR Writer on the project)
+#   Variables (optional overrides):
+#     GCP_REGION          default us-central1
+#     AR_REPOSITORY       default b2c-advisor
+#     CLOUD_RUN_SERVICE   default b2c-advisor-api
+#
+# Prefer storing only GCP_SA_KEY + GCP_PROJECT_ID; rotate keys if leaked.
+
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Submit Cloud Build (build → Artifact Registry → Cloud Run)
+        env:
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          AR_REPOSITORY: ${{ vars.AR_REPOSITORY }}
+          CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+        run: |
+          set -eux
+          REGION="${GCP_REGION:-us-central1}"
+          REPO="${AR_REPOSITORY:-b2c-advisor}"
+          SVC="${CLOUD_RUN_SERVICE:-b2c-advisor-api}"
+          gcloud builds submit --config=cloudbuild.yaml \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --substitutions=_LOCATION="${REGION}",_REPOSITORY="${REPO}",_IMAGE=api,_SERVICE="${SVC}"

@@ -1,0 +1,73 @@
+# Cloud Build: Docker image → Artifact Registry → Cloud Run
+#
+# Prereqs (once per project):
+#   gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
+#   gcloud artifacts repositories create ${_REPOSITORY} --repository-format=docker --location=${_LOCATION}
+#
+# --- Deploy from your laptop ---
+#   gcloud builds submit --config=cloudbuild.yaml \
+#     --substitutions=_LOCATION=us-central1,_REPOSITORY=b2c-advisor,_IMAGE=api,_SERVICE=b2c-advisor-api
+#
+# --- Deploy from GitHub (pick one) ---
+#
+# A) Native trigger (no Actions secrets for GCP in GitHub):
+#    GCP Console → Cloud Build → Triggers → Connect repository → GitHub → select repo.
+#    Create trigger: Event = Push to branch (e.g. main), Config = cloudbuild.yaml.
+#    Grant the Cloud Build service account: Artifact Registry Writer, Cloud Run Admin,
+#    Service Account User (on the Cloud Run runtime SA if needed).
+#
+# B) GitHub Actions: push to `main` runs .github/workflows/deploy-cloud-run.yml
+#    (uses secrets GCP_PROJECT_ID + GCP_SA_KEY; see that file for IAM and optional Variables).
+#
+# After first deploy, set env/secrets (DB, API keys) in console or:
+#   gcloud run services update ${_SERVICE} --region ${_LOCATION} \
+#     --set-secrets=DATABASE_URL=DATABASE_URL:latest \
+#     --set-env-vars=NODE_ENV=production,LLM_PROVIDER=gemini,PORT=8080
+
+substitutions:
+  _LOCATION: us-central1
+  _REPOSITORY: b2c-advisor
+  _IMAGE: api
+  _SERVICE: b2c-advisor-api
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - "-t"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
+      - "-t"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:latest"
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - "--all-tags"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - "${_SERVICE}"
+      - "--image"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
+      - "--region"
+      - "${_LOCATION}"
+      - "--platform"
+      - managed
+      - "--port"
+      - "8080"
+      - "--allow-unauthenticated"
+
+images:
+  - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
+  - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:latest"
