@@ -26,5 +26,7 @@ CREATE TABLE IF NOT EXISTS "Feedback" (
     id SERIAL NOT NULL PRIMARY KEY,
     query TEXT NOT NULL,
     response TEXT NOT NULL,
-    rating INTEGER NOT NULL
+    rating INTEGER,
+    user_id TEXT,
+    comment TEXT
 );

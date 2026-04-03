@@ -57,10 +57,12 @@ Server listens on `APP_PORT` (default `3000`; Cloud Run’s `PORT` is used as fa
 | Method | Path | Body | Description |
 |--------|------|------|-------------|
 | GET | `/health` | — | Liveness |
+| GET | `/ping` | — | UI online check (`{ "ok": true }`, `Cache-Control: no-store`) |
 | POST | `/auth/register` | `{ "name", "email", "password" }` | Create user (password hashed with bcrypt) |
 | POST | `/auth/login` | `{ "email", "password" }` | Login; returns `user` and optional `token` if `JWT_SECRET` is set |
-| POST | `/agent/query` | `{ "userId": string, "query": string }` | Run the agent |
-| POST | `/agent/feedback` | `{ "query": string, "response": string, "rating": number }` | Store feedback |
+| POST | `/agent/query` | JSON or multipart | Run the agent (`Authorization: Bearer <jwt>` required; `userId` taken from token) |
+| POST | `/feedback` | See below | Store chat feedback (requires `Authorization: Bearer <jwt>`) |
+| POST | `/agent/feedback` | See below | Same as `/feedback` |
 | POST | `/agent/payslip/signed-upload` | `{ "userId", "filename", "contentType" }` | GCS signed URL (when bucket configured) |
 
 ### Examples
@@ -77,13 +79,29 @@ curl -s -X POST http://localhost:3000/auth/login \
   -d '{"email":"ada@example.com","password":"hunter42!"}'
 ```
 
-**Agent**
+**Agent** (requires `JWT_SECRET` in `.env` and `Authorization: Bearer <token>` from auth)
 
 ```bash
+TOKEN="<paste token from login/register response>"
+
 curl -s -X POST http://localhost:3000/agent/query \
   -H "Content-Type: application/json" \
-  -d '{"userId":"demo-user","query":"Compare my salary for 2025-03 vs 2025-04"}'
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"query":"Compare my salary for 2025-03 vs 2025-04"}'
 ```
+
+**Chat feedback** (`POST /feedback` or `POST /agent/feedback`)
+
+Body (JSON): `query` and `response` are required (user message and assistant reply). Optional: `userId`, `rating` (integer 1–5), `comment` (string, max 4000 chars). Returns `201` with `{ "success": true, "id": <number>, "ok": true }`.
+
+```bash
+curl -s -X POST http://localhost:3000/feedback \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"query":"What is PF?","response":"PF is provident fund...","rating":5,"comment":"Very clear"}'
+```
+
+Existing databases created before `user_id` / `comment` columns: run `sql/migrations/002_feedback_chat_columns.sql` once.
 
 Registration can take a moment because of **bcrypt** hashing; lower `BCRYPT_ROUNDS` in `.env` for faster local dev only (not for production).
 

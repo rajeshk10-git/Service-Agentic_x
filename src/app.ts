@@ -1,5 +1,7 @@
 import express from "express";
 import cors from "cors";
+import { postChatFeedback } from "./controllers/agent.controller";
+import { requireJwtUserId } from "./middleware/auth.middleware";
 import agentRoutes from "./routes/agent.routes";
 import authRoutes from "./routes/auth.routes";
 import internalRoutes from "./routes/internal.routes";
@@ -16,8 +18,16 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 
+/** UI connectivity: 200 + `{ "ok": true }` means API is reachable (use with fetch + no-store). */
+app.get("/ping", (_req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.json({ ok: true });
+});
+
 app.use("/internal", internalRoutes);
 app.use("/auth", authRoutes);
+/** Same handler as POST `/agent/feedback` — chat response feedback for the UI. */
+app.post("/feedback", requireJwtUserId, postChatFeedback);
 app.use("/agent", agentRoutes);
 
 app.use(

@@ -10,6 +10,7 @@ import {
  * Optional multipart: field `payslip` file instead of payslipBase64.
  */
 export interface AgentQueryJsonBody {
+  /** Set by `requireJwtUserId` from JWT `sub`; may be omitted in JSON when using Bearer auth. */
   userId: string;
   /** Required unless payslipBase64 (or multipart `payslip`) is sent. */
   query?: string;
@@ -19,10 +20,22 @@ export interface AgentQueryJsonBody {
   payslipBase64?: string;
 }
 
-interface FeedbackBody {
-  query?: string;
-  response?: string;
+const FEEDBACK_COMMENT_MAX = 4000;
+
+/**
+ * POST `/agent/feedback` and POST `/feedback` — store user feedback on a chat turn.
+ */
+export interface ChatFeedbackBody {
+  /** User message that was sent to the agent. */
+  query: string;
+  /** Assistant reply the user is reacting to. */
+  response: string;
+  /** Same id as `/agent/query` when applicable. */
+  userId?: string;
+  /** Optional 1–5 (1 poor, 5 great). */
   rating?: number;
+  /** Optional free-text note. */
+  comment?: string;
 }
 
 const DEFAULT_QUERY_WITH_PAYSLIP_ONLY =
@@ -92,7 +105,7 @@ export async function postAgentQuery(req: Request, res: Response): Promise<void>
       res.status(400).json({
         success: false,
         error:
-          "userId is required (string). Example: { \"userId\": \"user-123\", \"query\": \"...\" }",
+          "userId is required. Authenticate with Authorization: Bearer <token> (from POST /auth/login or /auth/register).",
       });
       return;
     }
@@ -155,34 +168,125 @@ export async function postAgentQuery(req: Request, res: Response): Promise<void>
   }
 }
 
-export async function postFeedback(
-  req: Request<object, unknown, FeedbackBody>,
-  res: Response,
-): Promise<void> {
+export async function postChatFeedback(req: Request, res: Response): Promise<void> {
   try {
-    const { query, response, rating } = req.body ?? {};
-    if (!query || typeof query !== "string") {
-      res.status(400).json({ error: "query is required" });
-      return;
-    }
-    if (!response || typeof response !== "string") {
-      res.status(400).json({ error: "response is required" });
-      return;
-    }
-    if (rating === undefined || typeof rating !== "number" || !Number.isInteger(rating)) {
-      res.status(400).json({ error: "rating is required and must be an integer" });
+    const raw = req.body;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      res.status(400).json({
+        success: false,
+        error: "Expected JSON body with query and response",
+      });
       return;
     }
 
-    const { rows } = await getPool().query(
-      `INSERT INTO "Feedback" (query, response, rating) VALUES ($1, $2, $3) RETURNING id`,
-      [query, response, rating],
-    );
-    const id = rows[0]?.id as number;
+    const b = raw as Record<string, unknown>;
+    const query =
+      typeof b.query === "string" ? b.query.trim() : "";
+    const responseText =
+      typeof b.response === "string" ? b.response.trim() : "";
 
-    res.status(201).json({ id, ok: true });
+    if (!query) {
+      res.status(400).json({ success: false, error: "query is required" });
+      return;
+    }
+    if (!responseText) {
+      res.status(400).json({ success: false, error: "response is required" });
+      return;
+    }
+
+    const userId =
+      typeof b.userId === "string" && b.userId.trim()
+        ? b.userId.trim()
+        : null;
+
+    let rating: number | null = null;
+    if (b.rating !== undefined && b.rating !== null) {
+      if (typeof b.rating !== "number" || !Number.isInteger(b.rating)) {
+        res.status(400).json({
+          success: false,
+          error: "rating must be an integer between 1 and 5 when provided",
+        });
+        return;
+      }
+      if (b.rating < 1 || b.rating > 5) {
+        res.status(400).json({
+          success: false,
+          error: "rating must be between 1 and 5",
+        });
+        return;
+      }
+      rating = b.rating;
+    }
+
+    let comment: string | null = null;
+    if (typeof b.comment === "string" && b.comment.trim()) {
+      const c = b.comment.trim();
+      if (c.length > FEEDBACK_COMMENT_MAX) {
+        res.status(400).json({
+          success: false,
+          error: `comment must be at most ${FEEDBACK_COMMENT_MAX} characters`,
+        });
+        return;
+      }
+      comment = c;
+    }
+
+    const id = await insertFeedbackRow({
+      query,
+      response: responseText,
+      rating,
+      userId,
+      comment,
+    });
+
+    res.status(201).json({ success: true, id, ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
+    res.status(500).json({ success: false, error: message });
   }
 }
+
+function isPgUndefinedColumn(err: unknown): boolean {
+  const e = err as { code?: string; message?: string };
+  if (e.code === "42703") return true;
+  return /column .* does not exist/i.test(e.message ?? "");
+}
+
+/** Prefer extended row; fall back if DB was never migrated (no `user_id` / `comment`). */
+async function insertFeedbackRow(args: {
+  query: string;
+  response: string;
+  rating: number | null;
+  userId: string | null;
+  comment: string | null;
+}): Promise<number> {
+  const pool = getPool();
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO "Feedback" (query, response, rating, user_id, comment)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      [
+        args.query,
+        args.response,
+        args.rating,
+        args.userId,
+        args.comment,
+      ],
+    );
+    return rows[0]?.id as number;
+  } catch (err) {
+    if (!isPgUndefinedColumn(err)) {
+      throw err;
+    }
+    const rating =
+      args.rating ??
+      3;
+    const { rows } = await pool.query(
+      `INSERT INTO "Feedback" (query, response, rating) VALUES ($1, $2, $3) RETURNING id`,
+      [args.query, args.response, rating],
+    );
+    return rows[0]?.id as number;
+  }
+}
+
