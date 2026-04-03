@@ -82,7 +82,7 @@ function labelFromProp(parent: DocEntity, propType: string): string {
 
 /**
  * Maps custom-processor entities (earning_item, tax_item, deduction_item, etc.)
- * into fields compatible with Prisma `Salary` (basic, hra, tax, pf, month YYYY-MM).
+ * into fields compatible with the `Salary` table (basic, hra, tax, pf, month YYYY-MM).
  */
 export function extractPayslipFromDocumentAi(
   doc: protos.google.cloud.documentai.v1.IDocument | null | undefined,

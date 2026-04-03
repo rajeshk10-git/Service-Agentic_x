@@ -1,7 +1,8 @@
 import bcrypt from "bcrypt";
+import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env";
-import { prisma } from "../db/prisma";
+import { getPool } from "../db/pool";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -69,9 +70,12 @@ export async function registerUser(input: RegisterInput): Promise<AuthResult> {
 
   const email = input.email.trim().toLowerCase();
   const name = input.name.trim();
+  const pool = getPool();
 
-  const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) {
+  const dup = await pool.query(`SELECT id FROM users WHERE email = $1 LIMIT 1`, [
+    email,
+  ]);
+  if (dup.rows[0]) {
     return {
       ok: false,
       code: "email_taken",
@@ -80,10 +84,14 @@ export async function registerUser(input: RegisterInput): Promise<AuthResult> {
   }
 
   const passwordHash = await bcrypt.hash(input.password, env.BCRYPT_ROUNDS);
-  const user = await prisma.user.create({
-    data: { name, email, passwordHash },
-    select: { id: true, name: true, email: true },
-  });
+  const id = randomUUID();
+  const { rows } = await pool.query(
+    `INSERT INTO users (id, name, email, password_hash, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, NOW(), NOW())
+     RETURNING id, name, email`,
+    [id, name, email, passwordHash],
+  );
+  const user = rows[0] as { id: string; name: string; email: string };
 
   const publicUser = toPublicUser(user);
   const token = signToken(publicUser);
@@ -95,10 +103,14 @@ export async function loginUser(input: LoginInput): Promise<AuthResult> {
   if (err) return { ok: false, code: "validation_error", message: err };
 
   const email = input.email.trim().toLowerCase();
-  const row = await prisma.user.findUnique({
-    where: { email },
-    select: { id: true, name: true, email: true, passwordHash: true },
-  });
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT id, name, email, password_hash FROM users WHERE email = $1 LIMIT 1`,
+    [email],
+  );
+  const row = rows[0] as
+    | { id: string; name: string; email: string; password_hash: string }
+    | undefined;
 
   if (!row) {
     return {
@@ -108,7 +120,7 @@ export async function loginUser(input: LoginInput): Promise<AuthResult> {
     };
   }
 
-  const match = await bcrypt.compare(input.password, row.passwordHash);
+  const match = await bcrypt.compare(input.password, row.password_hash);
   if (!match) {
     return {
       ok: false,

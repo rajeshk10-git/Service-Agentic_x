@@ -1,6 +1,6 @@
 # Financial Wellness AI Agent (Backend)
 
-Node.js + TypeScript + Express service that powers a personal financial wellness agent using OpenAI tool calling, PostgreSQL (Prisma), optional Python microservices for tax and OCR, and an in-memory RAG stub.
+Node.js + TypeScript + Express service that powers a personal financial wellness agent using OpenAI tool calling, PostgreSQL via the `pg` driver, optional Python microservices for tax and OCR, and an in-memory RAG stub.
 
 ## Prerequisites
 
@@ -27,9 +27,7 @@ Node.js + TypeScript + Express service that powers a personal financial wellness
 
 3. **Create database tables**
 
-   ```bash
-   npx prisma db push
-   ```
+   Apply `sql/schema.sql` to your database (e.g. `psql "$DATABASE_URL" -f sql/schema.sql`), or reuse an existing DB that already matches those tables.
 
 4. **Seed sample payroll data** (optional)
 
@@ -102,8 +100,9 @@ Minimal FastAPI examples:
 ## Project layout
 
 - `src/services/agent.service.ts` — agent loop (payroll → RAG → LLM → tools)
-- `src/services/tool.service.ts` — tool execution (Axios + Prisma)
+- `src/services/tool.service.ts` — tool execution (Axios + SQL)
 - `src/utils/llm/` — OpenAI / Vertex Gemini completions + tool definitions
 - `src/utils/prompt.ts` — system prompts
 - `src/services/auth.service.ts` — register / login (bcrypt + optional JWT)
-- `prisma/schema.prisma` — `User`, `Salary`, `Feedback`
+- `sql/schema.sql` — `users`, `Salary`, `Feedback` tables
+- `src/db/pool.ts` — shared `pg` connection pool

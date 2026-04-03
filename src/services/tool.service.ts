@@ -71,7 +71,9 @@ export class ToolService {
       };
     }
     try {
+      console.log('START Q');
       const da = await processDocumentFromBytes(buffer, mimeType);
+      console.log('END Q');
       return await this.finalizeDocumentAiParse(userId, da);
     } catch (err) {
       return {

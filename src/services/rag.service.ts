@@ -1,4 +1,4 @@
-import type { Salary } from "@prisma/client";
+import type { Salary } from "../db/types";
 
 export interface RagHit {
   id: string;

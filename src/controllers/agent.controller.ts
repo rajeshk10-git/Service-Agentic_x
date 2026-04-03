@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { prisma } from "../db/prisma";
+import { getPool } from "../db/pool";
 import {
   agentService,
   type RunAgentPayslipFile,
@@ -174,11 +174,13 @@ export async function postFeedback(
       return;
     }
 
-    const row = await prisma.feedback.create({
-      data: { query, response, rating },
-    });
+    const { rows } = await getPool().query(
+      `INSERT INTO "Feedback" (query, response, rating) VALUES ($1, $2, $3) RETURNING id`,
+      [query, response, rating],
+    );
+    const id = rows[0]?.id as number;
 
-    res.status(201).json({ id: row.id, ok: true });
+    res.status(201).json({ id, ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
