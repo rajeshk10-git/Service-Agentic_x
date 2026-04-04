@@ -16,7 +16,6 @@ export interface RegisterInput {
   name: string;
   email: string;
   password: string;
-  confirm: string;
 }
 
 export interface LoginInput {
@@ -71,10 +70,6 @@ function validateRegister(input: RegisterInput): string | null {
   }
   const pwdErr = validateStrongPassword(input.password);
   if (pwdErr) return pwdErr;
-
-  if (input.password !== input.confirm) {
-    return "Passwords do not match";
-  }
 
   return null;
 }
