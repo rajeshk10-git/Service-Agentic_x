@@ -24,6 +24,12 @@ app.get("/ping", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/ping-pong", (_req, res) => {
+  console.log("ping-pong hit");
+  const timestamp: any = new Date().toISOString();
+  res.json({ pong: true, timestamp });
+});
+
 app.use("/internal", internalRoutes);
 app.use("/auth", authRoutes);
 /** Same handler as POST `/agent/feedback` — chat response feedback for the UI. */

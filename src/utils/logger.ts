@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- this IS the logger; console is the intended output */
 import { env } from "../config/env";
 
 type LogFields = Record<string, unknown>;

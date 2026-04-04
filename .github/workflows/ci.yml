@@ -1,0 +1,95 @@
+name: CI — Lint, Test & AI Review
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── Lint (non-blocking) ──────────────────────────────────────
+      - name: ESLint
+        id: lint
+        continue-on-error: true
+        run: npm run lint
+
+      # ── Build ────────────────────────────────────────────────────
+      - name: TypeScript build
+        run: npm run build
+
+      # ── Tests (non-blocking) ─────────────────────────────────────
+      - name: Run unit tests
+        id: test
+        continue-on-error: true
+        run: npm run test:ci
+        env:
+          JEST_JUNIT_OUTPUT_DIR: reports
+          JEST_JUNIT_OUTPUT_NAME: junit.xml
+
+      # ── Test report on PR ────────────────────────────────────────
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Jest Test Results
+          path: reports/junit.xml
+          reporter: jest-junit
+          fail-on-error: false
+
+      - name: Upload test report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: reports/junit.xml
+          retention-days: 30
+
+      # ── Highlight failures (does NOT block merge) ────────────────
+      - name: Summarize test results
+        if: always()
+        run: |
+          if [ "${{ steps.test.outcome }}" = "failure" ]; then
+            echo "::warning::Some unit tests failed. See the Jest Test Results check for details."
+            echo "## ⚠️ Test Failures Detected" >> $GITHUB_STEP_SUMMARY
+            echo "Some tests failed but deployment is **not blocked**." >> $GITHUB_STEP_SUMMARY
+            echo "Please review the [test report](../checks) and fix failing tests." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ✅ All Tests Passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ steps.lint.outcome }}" = "failure" ]; then
+            echo "::warning::ESLint found issues. Run 'npm run lint' locally to see details."
+            echo "## ⚠️ Lint Issues Found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # ── Gemini Review Agent ──────────────────────────────────────
+      - name: Run AI Review Agent
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: npx tsx scripts/pr-review-agent.ts
