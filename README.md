@@ -59,7 +59,7 @@ Server listens on `APP_PORT` (default `3000`; Cloud Run’s `PORT` is used as fa
 | GET | `/health` | — | Liveness |
 | GET | `/ping` | — | UI online check (`{ "ok": true }`, `Cache-Control: no-store`) |
 | POST | `/auth/register` | `{ "name", "email", "password" }` | Create user (password hashed with bcrypt) |
-| POST | `/auth/login` | `{ "email", "password" }` | Login; returns `user` and optional `token` if `JWT_SECRET` is set |
+| POST | `/auth/login` | `{ "email", "password" }` | Login; returns `user` and optional `token` if `JWT_SECRET` is set (JWT claims: `sub`, `userId` — same user id — and `email`) |
 | POST | `/agent/query` | JSON or multipart | Run the agent (`Authorization: Bearer <jwt>` required; `userId` taken from token). Appends user + assistant rows to `chat_history`; response includes `sessionId` (UUID). Send the same `sessionId` on later turns to group the conversation. |
 | POST | `/feedback` | See below | Store chat feedback (requires `Authorization: Bearer <jwt>`) |
 | POST | `/agent/feedback` | See below | Same as `/feedback` |

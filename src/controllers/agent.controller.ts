@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import type { Request, Response } from "express";
+import { getAuthUserId } from "../middleware/auth.middleware";
 import { getPool } from "../db/pool";
 import {
   agentService,
@@ -15,7 +16,10 @@ const SESSION_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface AgentQueryJsonBody {
-  /** Set by `requireJwtUserId` from JWT `sub`; may be omitted in JSON when using Bearer auth. */
+  /**
+   * Set by `requireJwtUserId` from JWT (`userId` / `sub`). Omit in JSON when using Bearer auth;
+   * do not send a different userId than the token — the server overwrites from the JWT.
+   */
   userId: string;
   /** Required unless payslipBase64 (or multipart `payslip`) is sent. */
   query?: string;
@@ -40,7 +44,7 @@ export interface ChatFeedbackBody {
   query: string;
   /** Assistant reply the user is reacting to. */
   response: string;
-  /** Same id as `/agent/query` when applicable. */
+  /** Set from JWT by `requireJwtUserId`; optional in body for tests without auth middleware. */
   userId?: string;
   /** Optional 1–5 (1 poor, 5 great). */
   rating?: number;
@@ -105,18 +109,18 @@ export async function postAgentQuery(req: Request, res: Response): Promise<void>
       res.status(400).json({
         success: false,
         error:
-          "Expected JSON object with userId, query, and optional payslipMimeType + payslipBase64",
+          "Expected JSON object with query (and optional payslip fields). userId comes from JWT when using Bearer auth.",
       });
       return;
     }
 
     const record = raw as unknown as Record<string, unknown>;
-    const userIdRaw = getTrimmedField(record, "userId");
+    const userIdRaw = getAuthUserId(req);
     if (!userIdRaw) {
       res.status(400).json({
         success: false,
         error:
-          "userId is required. Authenticate with Authorization: Bearer <token> (from POST /auth/login or /auth/register).",
+          "Authenticated user id is required. Send Authorization: Bearer <token> from POST /auth/login or /auth/register (JWT includes userId).",
       });
       return;
     }
@@ -254,10 +258,7 @@ export async function postChatFeedback(req: Request, res: Response): Promise<voi
       return;
     }
 
-    const userId =
-      typeof b.userId === "string" && b.userId.trim()
-        ? b.userId.trim()
-        : null;
+    const userId = getAuthUserId(req) ?? null;
 
     let rating: number | null = null;
     if (b.rating !== undefined && b.rating !== null) {

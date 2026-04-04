@@ -10,8 +10,24 @@ function bearerToken(req: Request): string | undefined {
 }
 
 /**
- * Verifies `Authorization: Bearer <jwt>` (signed with `JWT_SECRET`, claim `sub` = user id).
- * Sets `req.body.userId` from the token (overwrites any client-supplied `userId`).
+ * Resolved user id: JWT `userId` claim if present, otherwise `sub` (must match when both set).
+ */
+export function getAuthUserId(req: Request): string | undefined {
+  if (typeof req.authUserId === "string" && req.authUserId.trim()) {
+    return req.authUserId.trim();
+  }
+  const b = req.body;
+  if (b && typeof b === "object" && !Array.isArray(b)) {
+    const u = (b as Record<string, unknown>).userId;
+    if (typeof u === "string" && u.trim()) return u.trim();
+  }
+  return undefined;
+}
+
+/**
+ * Verifies `Authorization: Bearer <jwt>` (signed with `JWT_SECRET`).
+ * Payload includes `userId` and `sub` (same value) plus `email`.
+ * Sets `req.authUserId` and `req.body.userId` (overwrites any client-supplied `userId`).
  *
  * Mount **after** `express.json` and, for `/agent/query`, after `payslipUploadMiddleware`
  * so `req.body` exists for JSON and multipart.
@@ -41,15 +57,30 @@ export function requireJwtUserId(
   }
 
   try {
-    const decoded = jwt.verify(token, secret) as jwt.JwtPayload;
-    const userId = decoded.sub;
-    if (!userId || typeof userId !== "string") {
+    const decoded = jwt.verify(token, secret) as jwt.JwtPayload & {
+      userId?: string;
+    };
+    const sub =
+      typeof decoded.sub === "string" ? decoded.sub.trim() : "";
+    const claimUserId =
+      typeof decoded.userId === "string" ? decoded.userId.trim() : "";
+    if (claimUserId && sub && claimUserId !== sub) {
       res.status(401).json({
         success: false,
-        error: "Invalid token: missing subject (user id)",
+        error: "Invalid token: userId and sub must match",
       });
       return;
     }
+    const userId = claimUserId || sub;
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        error: "Invalid token: missing user id (userId or sub)",
+      });
+      return;
+    }
+
+    req.authUserId = userId;
 
     if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
       req.body = {};

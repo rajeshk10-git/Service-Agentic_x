@@ -34,7 +34,7 @@ jest.mock("../config/env", () => ({
 
 jest.mock("../db/pool", () => ({
   getPool: jest.fn().mockReturnValue({
-    query: jest.fn().mockResolvedValue({ rows: [] }),
+    query: jest.fn().mockResolvedValue({ rows: [{ id: 1, chat_id: 1 }] }),
   }),
 }));
 
@@ -48,14 +48,20 @@ jest.mock("../services/agent.service", () => ({
   },
 }));
 
+jest.mock("../services/chat-history.service", () => ({
+  chatHistoryService: {
+    append: jest.fn().mockResolvedValue(1),
+  },
+}));
+
 import request from "supertest";
 import express from "express";
-import { postAgentQuery, postFeedback } from "./agent.controller";
+import { postAgentQuery, postChatFeedback } from "./agent.controller";
 
 const app = express();
 app.use(express.json());
 app.post("/agent/query", postAgentQuery);
-app.post("/agent/feedback", postFeedback);
+app.post("/agent/feedback", postChatFeedback);
 
 describe("POST /agent/query", () => {
   it("returns 400 when body is an array instead of object", async () => {
@@ -145,11 +151,11 @@ describe("POST /agent/feedback", () => {
     expect(res.body.error).toContain("rating");
   });
 
-  it("returns 400 when rating is missing", async () => {
+  it("returns 201 when rating is omitted", async () => {
     const res = await request(app)
       .post("/agent/feedback")
       .send({ query: "q", response: "r" });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain("rating");
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
   });
 });

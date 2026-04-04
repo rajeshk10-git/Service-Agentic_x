@@ -17,8 +17,11 @@ jest.mock("../config/env", () => ({
   },
 }));
 
+import jwt from "jsonwebtoken";
 import { registerUser, loginUser } from "./auth.service";
 import { getPool } from "../db/pool";
+
+const STRONG_PWD = "Abcd1234!";
 
 const mockQuery = jest.fn();
 (getPool as jest.Mock).mockReturnValue({ query: mockQuery });
@@ -29,7 +32,7 @@ describe("registerUser", () => {
   });
 
   it("rejects empty name", async () => {
-    const result = await registerUser({ name: "", email: "a@b.com", password: "12345678" });
+    const result = await registerUser({ name: "", email: "a@b.com", password: STRONG_PWD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("validation_error");
@@ -39,7 +42,7 @@ describe("registerUser", () => {
 
   it("rejects name longer than 200 chars", async () => {
     const longName = "A".repeat(201);
-    const result = await registerUser({ name: longName, email: "a@b.com", password: "12345678" });
+    const result = await registerUser({ name: longName, email: "a@b.com", password: STRONG_PWD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.message).toContain("too long");
@@ -47,7 +50,7 @@ describe("registerUser", () => {
   });
 
   it("rejects empty email", async () => {
-    const result = await registerUser({ name: "John", email: "", password: "12345678" });
+    const result = await registerUser({ name: "John", email: "", password: STRONG_PWD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.message).toContain("Email");
@@ -55,7 +58,7 @@ describe("registerUser", () => {
   });
 
   it("rejects invalid email format", async () => {
-    const result = await registerUser({ name: "John", email: "not-an-email", password: "12345678" });
+    const result = await registerUser({ name: "John", email: "not-an-email", password: STRONG_PWD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.message).toContain("Invalid email");
@@ -70,18 +73,18 @@ describe("registerUser", () => {
     }
   });
 
-  it("rejects password longer than 128 chars", async () => {
-    const longPwd = "A".repeat(129);
+  it("rejects password longer than max length", async () => {
+    const longPwd = "Aa1!" + "x".repeat(20);
     const result = await registerUser({ name: "John", email: "a@b.com", password: longPwd });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.message).toContain("too long");
+      expect(result.message).toMatch(/at most|too long/i);
     }
   });
 
   it("returns email_taken when duplicate email exists", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ id: "existing-id" }] });
-    const result = await registerUser({ name: "John", email: "taken@test.com", password: "12345678" });
+    const result = await registerUser({ name: "John", email: "taken@test.com", password: STRONG_PWD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("email_taken");
@@ -95,12 +98,33 @@ describe("registerUser", () => {
         rows: [{ id: "new-id", name: "John", email: "john@test.com" }],
       });
 
-    const result = await registerUser({ name: "John", email: "john@test.com", password: "12345678" });
+    const result = await registerUser({ name: "John", email: "john@test.com", password: STRONG_PWD });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.user.email).toBe("john@test.com");
       expect(result.user.name).toBe("John");
       expect(result.token).toBeDefined();
+    }
+  });
+
+  it("JWT payload includes userId equal to sub", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ id: "uid-claim", name: "Pat", email: "pat@test.com" }],
+      });
+    const result = await registerUser({
+      name: "Pat",
+      email: "pat@test.com",
+      password: STRONG_PWD,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok && result.token) {
+      const p = jwt.decode(result.token) as jwt.JwtPayload & {
+        userId?: string;
+      };
+      expect(p.sub).toBe("uid-claim");
+      expect(p.userId).toBe("uid-claim");
     }
   });
 
@@ -111,7 +135,7 @@ describe("registerUser", () => {
         rows: [{ id: "new-id", name: "Jane", email: "jane@test.com" }],
       });
 
-    await registerUser({ name: "Jane", email: "  Jane@TEST.com  ", password: "12345678" });
+    await registerUser({ name: "Jane", email: "  Jane@TEST.com  ", password: STRONG_PWD });
     expect(mockQuery.mock.calls[0][1]).toEqual(["jane@test.com"]);
   });
 });
@@ -122,7 +146,7 @@ describe("loginUser", () => {
   });
 
   it("rejects empty email", async () => {
-    const result = await loginUser({ email: "", password: "12345678" });
+    const result = await loginUser({ email: "", password: STRONG_PWD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.message).toContain("Email");
@@ -139,7 +163,7 @@ describe("loginUser", () => {
 
   it("returns invalid_credentials when user not found", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
-    const result = await loginUser({ email: "missing@test.com", password: "12345678" });
+    const result = await loginUser({ email: "missing@test.com", password: STRONG_PWD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("invalid_credentials");

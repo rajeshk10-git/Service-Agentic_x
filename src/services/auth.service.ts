@@ -96,7 +96,11 @@ function validateLogin(input: LoginInput): string | null {
 function signToken(user: PublicUser): string | undefined {
   if (!env.JWT_SECRET.trim()) return undefined;
   return jwt.sign(
-    { sub: user.id, email: user.email },
+    {
+      sub: user.id,
+      userId: user.id,
+      email: user.email,
+    },
     env.JWT_SECRET,
     { expiresIn: `${env.JWT_EXPIRES_DAYS}d` },
   );
