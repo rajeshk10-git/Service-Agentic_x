@@ -135,3 +135,72 @@ export interface SimulateTaxArgs {
   housing_loan_interest?: number;
   other?: number;
 }
+
+const COMPARE_TAX_REGIME_DEDUCTION_PROPS = {
+  standard_deduction_old: {
+    type: "number",
+    description:
+      "Standard deduction for OLD regime (salaried default in tool handler: ₹50,000 if omitted).",
+  },
+  new_regime_standard_deduction: {
+    type: "number",
+    description:
+      "Standard deduction for NEW regime only (default ₹50,000 if omitted — typical salaried).",
+  },
+  section_80c: {
+    type: "number",
+    description: "Section 80C (old regime only)",
+  },
+  section_80d: {
+    type: "number",
+    description: "Section 80D (old regime only)",
+  },
+  hra: {
+    type: "number",
+    description: "HRA exemption (old regime only)",
+  },
+  lta: {
+    type: "number",
+    description: "LTA exemption (old regime only)",
+  },
+  housing_loan_interest: {
+    type: "number",
+    description: "Housing loan interest (old regime only)",
+  },
+  other: {
+    type: "number",
+    description: "Other Chapter VI-A total (old regime only)",
+  },
+} as const;
+
+export const compareTaxRegimesToolDefinition: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "compare_tax_regimes",
+    description:
+      "Compare FY 2025-26 total tax (incl. cess) under OLD vs NEW regime for the same annual gross. Returns both computations, which is cheaper, and indicative annual tax difference. Use when the user asks which regime is better, cheaper, or saves more tax. Pass all old-regime deductions the user claims (80C, HRA, etc.); new regime in this model uses only standard deduction.",
+    parameters: {
+      type: "object",
+      properties: {
+        annual_gross: {
+          type: "number",
+          description: "Annual gross income in INR (same basis for both regimes)",
+        },
+        ...COMPARE_TAX_REGIME_DEDUCTION_PROPS,
+      },
+      required: ["annual_gross"],
+    },
+  },
+};
+
+export interface CompareTaxRegimesArgs {
+  annual_gross: number;
+  standard_deduction_old?: number;
+  new_regime_standard_deduction?: number;
+  section_80c?: number;
+  section_80d?: number;
+  hra?: number;
+  lta?: number;
+  housing_loan_interest?: number;
+  other?: number;
+}

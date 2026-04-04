@@ -72,9 +72,6 @@ function validateRegister(input: RegisterInput): string | null {
   const pwdErr = validateStrongPassword(input.password);
   if (pwdErr) return pwdErr;
 
-  if (input.confirm == null || input.confirm === "") {
-    return "Confirm password is required";
-  }
   if (input.password !== input.confirm) {
     return "Passwords do not match";
   }

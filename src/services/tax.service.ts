@@ -47,6 +47,19 @@ export interface Section80CSimulationNewRegime {
   tax_estimate: TaxResult;
 }
 
+/** Side-by-side old vs new regime (same gross; old uses full Chapter VI-A style deductions in this model). */
+export interface RegimeComparisonResult {
+  annual_gross: number;
+  old_regime: TaxResult;
+  new_regime: TaxResult;
+  /** Regime with lower total tax (incl. cess), or tie. */
+  lower_tax_regime: "old" | "new" | "tie";
+  /** How much less tax per year if you pick the cheaper regime (0 if tie). */
+  annual_tax_savings_inr_if_choose_lower: number;
+  /** old.totalTax - new.totalTax (positive ⇒ new regime has lower total tax). */
+  old_minus_new_total_tax: number;
+}
+
 export class TaxService {
   private readonly newRegimeSlabs = [
     { upTo: 300_000, rate: 0 },
@@ -191,6 +204,46 @@ export class TaxService {
       baseline_zero_80c,
       with_section_80c,
       total_tax_savings: Math.max(0, total_tax_savings),
+    };
+  }
+
+  /**
+   * Compare total tax (incl. cess) under old vs new regime for the same gross income.
+   * New regime uses only standard deduction in this model; old uses the provided `Deductions`.
+   */
+  compareRegimes(
+    income: number,
+    oldDeductions: Deductions,
+    newStandardDeduction: number,
+  ): RegimeComparisonResult {
+    const old_regime = this.calculateTax(income, oldDeductions, "old");
+    const new_regime = this.calculateTax(
+      income,
+      { standardDeduction: newStandardDeduction },
+      "new",
+    );
+    const diff = old_regime.totalTax - new_regime.totalTax;
+    const eps = 0.01;
+    let lower_tax_regime: "old" | "new" | "tie";
+    if (Math.abs(diff) < eps) {
+      lower_tax_regime = "tie";
+    } else if (diff > 0) {
+      lower_tax_regime = "new";
+    } else {
+      lower_tax_regime = "old";
+    }
+    const annual_tax_savings_inr_if_choose_lower =
+      lower_tax_regime === "tie"
+        ? 0
+        : Math.abs(diff);
+
+    return {
+      annual_gross: income,
+      old_regime,
+      new_regime,
+      lower_tax_regime,
+      annual_tax_savings_inr_if_choose_lower,
+      old_minus_new_total_tax: diff,
     };
   }
 }

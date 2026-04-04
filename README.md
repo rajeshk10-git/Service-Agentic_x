@@ -119,7 +119,7 @@ Minimal FastAPI example for **parse (`:8000`):** accept JSON `{ "text": "..." }`
 
 - `src/services/agent.service.ts` — agent loop (payroll → RAG → LLM → tools)
 - `src/services/chat-history.service.ts` — append-only `chat_history` rows for `/agent/query`
-- `src/services/tool.service.ts` — tool execution (Axios + SQL); includes `simulate_tax` (80C what-if, old regime) alongside `calculate_tax`
+- `src/services/tool.service.ts` — tool execution (Axios + SQL); tax tools: `calculate_tax`, `simulate_tax` (80C what-if), `compare_tax_regimes` (old vs new)
 - `src/utils/llm/` — OpenAI / Vertex Gemini completions + tool definitions
 - `src/utils/prompt.ts` — system prompts
 - `src/services/auth.service.ts` — register / login (bcrypt + optional JWT)

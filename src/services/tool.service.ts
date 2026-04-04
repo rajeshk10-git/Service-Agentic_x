@@ -13,7 +13,11 @@ import {
   type DocumentAiPayslipExtracted,
 } from "../gcp/documentai.extract";
 import { enqueueParseJob, isCloudTasksConfigured } from "../gcp/cloud-tasks.service";
-import type { CalculateTaxArgs, SimulateTaxArgs } from "../tools/tax.tool";
+import type {
+  CalculateTaxArgs,
+  CompareTaxRegimesArgs,
+  SimulateTaxArgs,
+} from "../tools/tax.tool";
 import type { CompareSalaryArgs } from "../tools/compare.tool";
 import type { GetSalaryDataArgs } from "../tools/salary.tool";
 import type { ParseSalarySlipArgs } from "../tools/parse.tool";
@@ -23,6 +27,7 @@ import { ragService } from "./rag.service";
 export type ToolName =
   | "calculate_tax"
   | "simulate_tax"
+  | "compare_tax_regimes"
   | "compare_salary"
   | "parse_salary_slip"
   | "get_salary_data";
@@ -38,6 +43,8 @@ export class ToolService {
         return this.calculateTax(args as CalculateTaxArgs);
       case "simulate_tax":
         return this.simulateTax(args as SimulateTaxArgs);
+      case "compare_tax_regimes":
+        return this.compareTaxRegimes(args as CompareTaxRegimesArgs);
       case "compare_salary":
         return this.compareSalary(args as CompareSalaryArgs, userId);
       case "parse_salary_slip":
@@ -232,6 +239,84 @@ export class ToolService {
     }
   }
 
+  private resolveStandardDeduction(
+    value: number | undefined,
+    defaultInr: number,
+  ): number {
+    if (typeof value === "number" && !Number.isNaN(value)) {
+      return value;
+    }
+    return defaultInr;
+  }
+
+  private async compareTaxRegimes(
+    args: CompareTaxRegimesArgs,
+  ): Promise<unknown> {
+    try {
+      if (
+        typeof args.annual_gross !== "number" ||
+        Number.isNaN(args.annual_gross) ||
+        args.annual_gross < 0
+      ) {
+        return {
+          error: true,
+          message: "annual_gross must be a non-negative number",
+        };
+      }
+
+      const oldStd = this.resolveStandardDeduction(
+        args.standard_deduction_old,
+        50_000,
+      );
+      const newStd = this.resolveStandardDeduction(
+        args.new_regime_standard_deduction,
+        50_000,
+      );
+
+      const oldDeductions: Deductions = {
+        standardDeduction: oldStd,
+        section80C: args.section_80c,
+        section80D: args.section_80d,
+        hra: args.hra,
+        lta: args.lta,
+        housingLoanInterest: args.housing_loan_interest,
+        other: args.other,
+      };
+
+      const raw = taxService.compareRegimes(
+        args.annual_gross,
+        oldDeductions,
+        newStd,
+      );
+
+      return {
+        tool: "compare_tax_regimes",
+        source: "tax_service",
+        financial_year: "2025-26",
+        annual_gross: raw.annual_gross,
+        assumptions: {
+          standard_deduction_old_inr: oldStd,
+          new_regime_standard_deduction_inr: newStd,
+          old_regime_includes_80c_80d_hra_etc_as_provided: true,
+          new_regime_only_standard_deduction_in_model: true,
+        },
+        old_regime: raw.old_regime,
+        new_regime: raw.new_regime,
+        lower_tax_regime: raw.lower_tax_regime,
+        annual_tax_savings_inr_if_choose_lower:
+          raw.annual_tax_savings_inr_if_choose_lower,
+        old_minus_new_total_tax: raw.old_minus_new_total_tax,
+        note: "Indicative only; actual choice depends on full return, rebates, and law. Consult a qualified tax advisor.",
+      };
+    } catch (err) {
+      return {
+        error: true,
+        tool: "compare_tax_regimes",
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   private async parseSalarySlip(
     args: ParseSalarySlipArgs,
     userId: string,
@@ -397,6 +482,7 @@ function isToolName(s: string): s is ToolName {
   return (
     s === "calculate_tax" ||
     s === "simulate_tax" ||
+    s === "compare_tax_regimes" ||
     s === "compare_salary" ||
     s === "parse_salary_slip" ||
     s === "get_salary_data"

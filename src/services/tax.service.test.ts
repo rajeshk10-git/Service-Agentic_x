@@ -27,3 +27,21 @@ describe("TaxService.simulateSection80CSavings", () => {
     }
   });
 });
+
+describe("TaxService.compareRegimes", () => {
+  it("returns old, new, and a lower_tax_regime", () => {
+    const r = taxService.compareRegimes(
+      1_200_000,
+      {
+        standardDeduction: 50_000,
+        section80C: 150_000,
+        hra: 100_000,
+      },
+      50_000,
+    );
+    expect(r.old_regime.regime).toBe("old");
+    expect(r.new_regime.regime).toBe("new");
+    expect(["old", "new", "tie"]).toContain(r.lower_tax_regime);
+    expect(r.annual_tax_savings_inr_if_choose_lower).toBeGreaterThanOrEqual(0);
+  });
+});
