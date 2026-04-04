@@ -1,27 +1,13 @@
 /**
  * Gemini-powered PR Review Agent.
  *
+ * Uses the Gemini REST API directly (no SDK dependency).
  * Runs in GitHub Actions on pull requests targeting main.
- * Uses Gemini function-calling to autonomously:
- *   1. List changed files
- *   2. Read diffs and source files
- *   3. Check test coverage
- *   4. Review code against strict rules
- *   5. Generate test suggestions
- *   6. Post a structured review comment
  */
 
-import {
-  GoogleGenerativeAI,
-  type FunctionDeclaration,
-  SchemaType,
-  type FunctionCallingMode,
-  type Part,
-} from "@google/generative-ai";
 import { execSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import https from "https";
-import http from "http";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? "";
@@ -37,7 +23,32 @@ if (!GEMINI_API_KEY || !GITHUB_TOKEN || !PR_NUMBER || !REPO) {
   process.exit(1);
 }
 
+const GEMINI_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 const GH_API = `https://api.github.com/repos/${REPO}`;
+
+// ─── Types for Gemini REST API ─────────────────────────────────────
+
+interface GeminiPart {
+  text?: string;
+  functionCall?: { name: string; args: Record<string, string> };
+  functionResponse?: { name: string; response: Record<string, unknown> };
+}
+
+interface GeminiContent {
+  role: string;
+  parts: GeminiPart[];
+}
+
+interface GeminiResponse {
+  candidates?: Array<{
+    content?: { parts?: GeminiPart[] };
+    finishReason?: string;
+  }>;
+  error?: { message?: string };
+}
+
+// ─── Strict rules & system prompt ──────────────────────────────────
 
 const STRICT_RULES = `
 STRICT CODE REVIEW RULES — flag violations as CRITICAL:
@@ -96,14 +107,76 @@ Rules for generated Jest tests:
 
 When all actions are complete, output exactly: DONE`;
 
+// ─── Tool declarations (Gemini REST format) ────────────────────────
+
+const TOOL_DECLARATIONS = [
+  {
+    name: "list_changed_files",
+    description: "List all files changed in this pull request.",
+    parameters: { type: "OBJECT" as const, properties: {} },
+  },
+  {
+    name: "get_diff",
+    description: "Get the git diff for a specific changed file.",
+    parameters: {
+      type: "OBJECT" as const,
+      properties: { file_path: { type: "STRING" as const, description: "Path to the file" } },
+      required: ["file_path"],
+    },
+  },
+  {
+    name: "read_file",
+    description: "Read the current full content of a file in the repository.",
+    parameters: {
+      type: "OBJECT" as const,
+      properties: { file_path: { type: "STRING" as const, description: "Path to the file" } },
+      required: ["file_path"],
+    },
+  },
+  {
+    name: "check_test_exists",
+    description: "Check if a .test.ts file exists for a given source file.",
+    parameters: {
+      type: "OBJECT" as const,
+      properties: { file_path: { type: "STRING" as const, description: "Source file path" } },
+      required: ["file_path"],
+    },
+  },
+  {
+    name: "read_test_results",
+    description: "Read JUnit XML test results from the CI test run.",
+    parameters: { type: "OBJECT" as const, properties: {} },
+  },
+  {
+    name: "post_review_comment",
+    description: "Post a markdown review comment on the GitHub pull request.",
+    parameters: {
+      type: "OBJECT" as const,
+      properties: { body: { type: "STRING" as const, description: "Markdown comment body" } },
+      required: ["body"],
+    },
+  },
+  {
+    name: "suggest_test_file",
+    description: "Post an AI-generated Jest test file suggestion as a PR comment.",
+    parameters: {
+      type: "OBJECT" as const,
+      properties: {
+        file_path: { type: "STRING" as const, description: "Source file being tested" },
+        content: { type: "STRING" as const, description: "Complete .test.ts file content" },
+      },
+      required: ["file_path", "content"],
+    },
+  },
+];
+
 // ─── Tool implementations ──────────────────────────────────────────
 
 function listChangedFiles(): string {
   if (BASE_SHA && HEAD_SHA) {
-    const result = execSync(
-      `git diff --name-only ${BASE_SHA} ${HEAD_SHA}`,
-      { encoding: "utf-8" },
-    );
+    const result = execSync(`git diff --name-only ${BASE_SHA} ${HEAD_SHA}`, {
+      encoding: "utf-8",
+    });
     return result.trim() || "No files changed.";
   }
   return "No BASE_SHA/HEAD_SHA available.";
@@ -146,7 +219,8 @@ function readTestResults(): string {
 
   let summary = `Test results: ${tests} tests, ${failures} failures, ${errors} errors.`;
   if (Number(failures) > 0 || Number(errors) > 0) {
-    const failedTests = xml.match(/<testcase[^>]*>[\s\S]*?<failure[\s\S]*?<\/testcase>/g) ?? [];
+    const failedTests =
+      xml.match(/<testcase[^>]*>[\s\S]*?<failure[\s\S]*?<\/testcase>/g) ?? [];
     for (const tc of failedTests.slice(0, 5)) {
       const nameMatch = /name="([^"]*)"/.exec(tc);
       const msgMatch = /message="([^"]*)"/.exec(tc);
@@ -156,23 +230,27 @@ function readTestResults(): string {
   return summary;
 }
 
-function ghRequest(method: string, path: string, body?: unknown): Promise<string> {
+// ─── HTTP helpers ──────────────────────────────────────────────────
+
+function httpsPost(
+  url: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const url = new URL(`${GH_API}${path}`);
-    const options = {
-      hostname: url.hostname,
-      path: url.pathname + url.search,
-      method,
-      headers: {
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "pr-review-agent",
-        ...(body ? { "Content-Type": "application/json" } : {}),
+    const parsed = new URL(url);
+    const payload = JSON.stringify(body);
+    const req = https.request(
+      {
+        hostname: parsed.hostname,
+        path: parsed.pathname + parsed.search,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          ...headers,
+        },
       },
-    };
-    const req = (url.protocol === "https:" ? https : http).request(
-      options,
       (res) => {
         let data = "";
         res.on("data", (chunk: Buffer) => (data += chunk.toString()));
@@ -180,20 +258,31 @@ function ghRequest(method: string, path: string, body?: unknown): Promise<string
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             resolve(data);
           } else {
-            reject(new Error(`GitHub API ${res.statusCode}: ${data.slice(0, 500)}`));
+            reject(
+              new Error(`HTTP ${res.statusCode}: ${data.slice(0, 500)}`),
+            );
           }
         });
       },
     );
     req.on("error", reject);
-    if (body) req.write(JSON.stringify(body));
+    req.write(payload);
     req.end();
   });
 }
 
 async function postReviewComment(body: string): Promise<string> {
   try {
-    await ghRequest("POST", `/issues/${PR_NUMBER}/comments`, { body });
+    await httpsPost(
+      `${GH_API}/issues/${PR_NUMBER}/comments`,
+      { body },
+      {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "pr-review-agent",
+      },
+    );
     return "Review comment posted successfully.";
   } catch (err) {
     return `Failed to post comment: ${err instanceof Error ? err.message : String(err)}`;
@@ -205,76 +294,15 @@ async function suggestTestFile(
   content: string,
 ): Promise<string> {
   const testPath = filePath.replace(/\.ts$/, ".test.ts");
-  const body =
+  const comment =
     `### AI-Generated Test Suggestion for \`${filePath}\`\n\n` +
     `No test file found. Suggested: \`${testPath}\`\n\n` +
     `\`\`\`typescript\n${content}\n\`\`\`\n\n` +
     `> Generated by PR Review Agent (Gemini). Review and save as \`${testPath}\` before merging.`;
-  return postReviewComment(body);
+  return postReviewComment(comment);
 }
 
-// ─── Tool declarations for Gemini ──────────────────────────────────
-
-const toolDeclarations: FunctionDeclaration[] = [
-  {
-    name: "list_changed_files",
-    description: "List all files changed in this pull request.",
-    parameters: { type: SchemaType.OBJECT, properties: {} },
-  },
-  {
-    name: "get_diff",
-    description: "Get the git diff for a specific changed file.",
-    parameters: {
-      type: SchemaType.OBJECT,
-      properties: { file_path: { type: SchemaType.STRING, description: "Path to the file" } },
-      required: ["file_path"],
-    },
-  },
-  {
-    name: "read_file",
-    description: "Read the current full content of a file in the repository.",
-    parameters: {
-      type: SchemaType.OBJECT,
-      properties: { file_path: { type: SchemaType.STRING, description: "Path to the file" } },
-      required: ["file_path"],
-    },
-  },
-  {
-    name: "check_test_exists",
-    description: "Check if a .test.ts file exists for a given source file.",
-    parameters: {
-      type: SchemaType.OBJECT,
-      properties: { file_path: { type: SchemaType.STRING, description: "Source file path" } },
-      required: ["file_path"],
-    },
-  },
-  {
-    name: "read_test_results",
-    description: "Read JUnit XML test results from the CI test run.",
-    parameters: { type: SchemaType.OBJECT, properties: {} },
-  },
-  {
-    name: "post_review_comment",
-    description: "Post a markdown review comment on the GitHub pull request.",
-    parameters: {
-      type: SchemaType.OBJECT,
-      properties: { body: { type: SchemaType.STRING, description: "Markdown comment body" } },
-      required: ["body"],
-    },
-  },
-  {
-    name: "suggest_test_file",
-    description: "Post an AI-generated Jest test file suggestion as a PR comment.",
-    parameters: {
-      type: SchemaType.OBJECT,
-      properties: {
-        file_path: { type: SchemaType.STRING, description: "Source file being tested" },
-        content: { type: SchemaType.STRING, description: "Complete .test.ts file content" },
-      },
-      required: ["file_path", "content"],
-    },
-  },
-];
+// ─── Tool dispatcher ───────────────────────────────────────────────
 
 type ToolArgs = Record<string, string>;
 
@@ -288,39 +316,72 @@ const TOOL_MAP: Record<string, (args: ToolArgs) => string | Promise<string>> = {
   suggest_test_file: (a) => suggestTestFile(a.file_path, a.content),
 };
 
+// ─── Gemini REST API call ──────────────────────────────────────────
+
+async function callGemini(
+  contents: GeminiContent[],
+): Promise<GeminiResponse> {
+  const url = `${GEMINI_URL}?key=${GEMINI_API_KEY}`;
+  const body = {
+    system_instruction: {
+      parts: [{ text: SYSTEM_PROMPT }],
+    },
+    contents,
+    tools: [{ function_declarations: TOOL_DECLARATIONS }],
+    tool_config: {
+      function_calling_config: { mode: "AUTO" },
+    },
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 8192,
+    },
+  };
+
+  const raw = await httpsPost(url, body);
+  return JSON.parse(raw) as GeminiResponse;
+}
+
 // ─── Agent loop ────────────────────────────────────────────────────
 
 async function runAgent(): Promise<void> {
-  const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    systemInstruction: SYSTEM_PROMPT,
-    tools: [{ functionDeclarations: toolDeclarations }],
-    toolConfig: {
-      functionCallingConfig: { mode: "AUTO" as FunctionCallingMode },
+  const history: GeminiContent[] = [
+    {
+      role: "user",
+      parts: [{ text: "A new pull request is open. Begin your review now." }],
     },
-  });
+  ];
 
-  const chat = model.startChat();
-  let response = await chat.sendMessage(
-    "A new pull request is open. Begin your review now.",
-  );
+  let geminiResponse = await callGemini(history);
 
   for (let step = 0; step < 30; step++) {
-    const candidate = response.response.candidates?.[0];
-    if (!candidate?.content?.parts) break;
+    if (geminiResponse.error) {
+      console.error("Gemini API error:", geminiResponse.error.message);
+      break;
+    }
 
-    const functionCalls = candidate.content.parts.filter(
-      (p): p is Part & { functionCall: { name: string; args: Record<string, string> } } =>
-        "functionCall" in p && p.functionCall !== undefined,
+    const candidate = geminiResponse.candidates?.[0];
+    const parts = candidate?.content?.parts ?? [];
+
+    if (parts.length === 0) {
+      console.log("No parts in response, stopping.");
+      break;
+    }
+
+    history.push({ role: "model", parts });
+
+    const functionCalls = parts.filter(
+      (p): p is GeminiPart & { functionCall: NonNullable<GeminiPart["functionCall"]> } =>
+        p.functionCall !== undefined,
     );
 
     if (functionCalls.length > 0) {
-      const functionResponses: Part[] = [];
+      const responseParts: GeminiPart[] = [];
 
       for (const fc of functionCalls) {
         const { name, args } = fc.functionCall;
-        console.log(`[Step ${step + 1}] Tool: ${name}(${Object.keys(args).join(", ")})`);
+        console.log(
+          `[Step ${step + 1}] Tool: ${name}(${Object.keys(args).join(", ")})`,
+        );
 
         const handler = TOOL_MAP[name];
         const result = handler
@@ -328,27 +389,29 @@ async function runAgent(): Promise<void> {
           : `Unknown tool: ${name}`;
         console.log(`           Result: ${result.slice(0, 150)}`);
 
-        functionResponses.push({
+        responseParts.push({
           functionResponse: { name, response: { result } },
         });
       }
 
-      response = await chat.sendMessage(functionResponses);
+      history.push({ role: "function", parts: responseParts });
+      geminiResponse = await callGemini(history);
       continue;
     }
 
-    const textParts = candidate.content.parts.filter(
-      (p): p is Part & { text: string } => "text" in p && typeof p.text === "string",
-    );
-
+    const textParts = parts.filter((p) => typeof p.text === "string");
     if (textParts.length > 0) {
       const text = textParts.map((p) => p.text).join("");
-      console.log(`[Step ${step + 1}] Agent: ${text.slice(0, 200)}`);
+      console.log(`[Step ${step + 1}] Agent: ${text.slice(0, 300)}`);
       if (text.includes("DONE")) {
         console.log("\nAgent completed review.");
         return;
       }
-      response = await chat.sendMessage("Continue.");
+      history.push({
+        role: "user",
+        parts: [{ text: "Continue." }],
+      });
+      geminiResponse = await callGemini(history);
       continue;
     }
 
