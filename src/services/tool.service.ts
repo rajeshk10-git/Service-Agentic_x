@@ -1,6 +1,6 @@
 import axios, { AxiosError } from "axios";
 import { env } from "../config/env";
-import type { Deductions } from "./tax.service";
+import type { Deductions, DeductionsWithout80C } from "./tax.service";
 import { taxService } from "./tax.service";
 import {
   canProcessPayslipFromBytes,
@@ -13,7 +13,7 @@ import {
   type DocumentAiPayslipExtracted,
 } from "../gcp/documentai.extract";
 import { enqueueParseJob, isCloudTasksConfigured } from "../gcp/cloud-tasks.service";
-import type { CalculateTaxArgs } from "../tools/tax.tool";
+import type { CalculateTaxArgs, SimulateTaxArgs } from "../tools/tax.tool";
 import type { CompareSalaryArgs } from "../tools/compare.tool";
 import type { GetSalaryDataArgs } from "../tools/salary.tool";
 import type { ParseSalarySlipArgs } from "../tools/parse.tool";
@@ -22,6 +22,7 @@ import { ragService } from "./rag.service";
 
 export type ToolName =
   | "calculate_tax"
+  | "simulate_tax"
   | "compare_salary"
   | "parse_salary_slip"
   | "get_salary_data";
@@ -35,6 +36,8 @@ export class ToolService {
     switch (name) {
       case "calculate_tax":
         return this.calculateTax(args as CalculateTaxArgs);
+      case "simulate_tax":
+        return this.simulateTax(args as SimulateTaxArgs);
       case "compare_salary":
         return this.compareSalary(args as CompareSalaryArgs, userId);
       case "parse_salary_slip":
@@ -147,6 +150,83 @@ export class ToolService {
       return {
         error: true,
         tool: "calculate_tax",
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  private async simulateTax(args: SimulateTaxArgs): Promise<unknown> {
+    try {
+      if (
+        typeof args.annual_gross !== "number" ||
+        Number.isNaN(args.annual_gross) ||
+        args.annual_gross < 0
+      ) {
+        return {
+          error: true,
+          message: "annual_gross must be a non-negative number",
+        };
+      }
+
+      const otherDeductions: DeductionsWithout80C = {
+        standardDeduction: args.standard_deduction,
+        section80D: args.section_80d,
+        hra: args.hra,
+        lta: args.lta,
+        housingLoanInterest: args.housing_loan_interest,
+        other: args.other,
+      };
+
+      const hasProposed =
+        typeof args.section_80c_proposed === "number" &&
+        !Number.isNaN(args.section_80c_proposed);
+
+      const maximize80C =
+        args.maximize_80c === true
+          ? true
+          : hasProposed
+            ? false
+            : true;
+
+      const proposed80C = hasProposed ? args.section_80c_proposed : undefined;
+
+      const raw = taxService.simulateSection80CSavings(
+        args.annual_gross,
+        args.regime,
+        otherDeductions,
+        { maximize80C, proposed80C },
+      );
+
+      if (raw.kind === "new_regime_no_80c") {
+        return {
+          tool: "simulate_tax",
+          source: "tax_service",
+          financial_year: "2025-26",
+          kind: raw.kind,
+          message: raw.message,
+          tax_estimate: raw.tax_estimate,
+          note: "Indicative only; verify with a qualified tax advisor.",
+        };
+      }
+
+      return {
+        tool: "simulate_tax",
+        source: "tax_service",
+        financial_year: "2025-26",
+        kind: raw.kind,
+        annual_gross: raw.annual_gross,
+        section_80c_cap_inr: raw.section_80c_cap_inr,
+        section_80c_modeled: raw.section_80c_modeled,
+        baseline_no_80c: raw.baseline_zero_80c,
+        with_modeled_80c: raw.with_section_80c,
+        total_tax_savings_inr: raw.total_tax_savings,
+        note:
+          "Savings = total tax (including cess) with ₹0 under 80C minus total tax with modeled 80C, old regime only. Assumes no other 80C is already claimed. Indicative only.",
+      };
+    } catch (err) {
+      return {
+        error: true,
+        tool: "simulate_tax",
         message: err instanceof Error ? err.message : String(err),
       };
     }
@@ -316,6 +396,7 @@ export const toolService = new ToolService();
 function isToolName(s: string): s is ToolName {
   return (
     s === "calculate_tax" ||
+    s === "simulate_tax" ||
     s === "compare_salary" ||
     s === "parse_salary_slip" ||
     s === "get_salary_data"

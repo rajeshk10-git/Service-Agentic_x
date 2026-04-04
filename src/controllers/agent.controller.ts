@@ -269,10 +269,10 @@ export async function postChatFeedback(req: Request, res: Response): Promise<voi
         });
         return;
       }
-      if (b.rating < 1 || b.rating > 5) {
+      if (b.rating < 0 || b.rating > 5) {
         res.status(400).json({
           success: false,
-          error: "rating must be between 1 and 5",
+          error: "rating must be between 0 and 5",
         });
         return;
       }

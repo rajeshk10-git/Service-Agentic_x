@@ -24,6 +24,29 @@ export interface TaxResult {
   breakdown: { slab: string; amount: number }[];
 }
 
+/** Statutory cap for Section 80C (combined specified instruments) — FY-agnostic for MVP. */
+export const SECTION_80C_CAP_INR = 150_000;
+
+export type DeductionsWithout80C = Omit<Deductions, "section80C">;
+
+/** What-if: tax with ₹0 under 80C vs with a capped 80C amount (old regime only). */
+export interface Section80CSimulationOldRegime {
+  kind: "old_regime_80c";
+  annual_gross: number;
+  section_80c_cap_inr: number;
+  section_80c_modeled: number;
+  baseline_zero_80c: TaxResult;
+  with_section_80c: TaxResult;
+  total_tax_savings: number;
+}
+
+/** New regime does not allow 80C in this model — return tax estimate + explanation. */
+export interface Section80CSimulationNewRegime {
+  kind: "new_regime_no_80c";
+  message: string;
+  tax_estimate: TaxResult;
+}
+
 export class TaxService {
   private readonly newRegimeSlabs = [
     { upTo: 300_000, rate: 0 },
@@ -112,6 +135,62 @@ export class TaxService {
       cess,
       totalTax,
       breakdown,
+    };
+  }
+
+  /**
+   * MVP tax simulation: under **old** regime, compare total tax (incl. cess) with Section 80C = 0
+   * vs with 80C = min(proposed, cap). Under **new** regime, 80C is not modeled — returns
+   * a normal new-regime estimate and an explanatory message.
+   */
+  simulateSection80CSavings(
+    income: number,
+    regime: TaxRegime,
+    otherDeductions: DeductionsWithout80C,
+    opts: {
+      /** If true, model full ₹1.5L 80C (within cap). */
+      maximize80C: boolean;
+      /** Used when maximize80C is false; clamped to [0, cap]. */
+      proposed80C?: number;
+    },
+  ): Section80CSimulationOldRegime | Section80CSimulationNewRegime {
+    if (regime === "new") {
+      const deductions: Deductions = {
+        ...otherDeductions,
+      };
+      return {
+        kind: "new_regime_no_80c",
+        message:
+          "Section 80C (and most Chapter VI-A deductions) are not available under the new tax regime in this calculator. The estimate below is for the new regime only. To see indicative 80C tax savings, run simulate_tax with regime old.",
+        tax_estimate: this.calculateTax(income, deductions, "new"),
+      };
+    }
+
+    let section80C = SECTION_80C_CAP_INR;
+    if (!opts.maximize80C) {
+      const p =
+        typeof opts.proposed80C === "number" && !Number.isNaN(opts.proposed80C)
+          ? opts.proposed80C
+          : 0;
+      section80C = Math.min(Math.max(0, p), SECTION_80C_CAP_INR);
+    }
+
+    const base: Deductions = { ...otherDeductions, section80C: 0 };
+    const with80c: Deductions = { ...otherDeductions, section80C };
+
+    const baseline_zero_80c = this.calculateTax(income, base, "old");
+    const with_section_80c = this.calculateTax(income, with80c, "old");
+    const total_tax_savings =
+      baseline_zero_80c.totalTax - with_section_80c.totalTax;
+
+    return {
+      kind: "old_regime_80c",
+      annual_gross: income,
+      section_80c_cap_inr: SECTION_80C_CAP_INR,
+      section_80c_modeled: section80C,
+      baseline_zero_80c,
+      with_section_80c,
+      total_tax_savings: Math.max(0, total_tax_savings),
     };
   }
 }
