@@ -5,6 +5,8 @@ interface RegisterBody {
   name?: string;
   email?: string;
   password?: string;
+  /** Must equal `password` (same as Angular `passwordsMatch`). */
+  confirm?: string;
 }
 
 interface LoginBody {
@@ -16,11 +18,12 @@ export async function postRegister(
   req: Request<object, unknown, RegisterBody>,
   res: Response,
 ): Promise<void> {
-  const { name, email, password } = req.body ?? {};
+  const { name, email, password, confirm } = req.body ?? {};
   const result = await registerUser({
     name: typeof name === "string" ? name : "",
     email: typeof email === "string" ? email : "",
     password: typeof password === "string" ? password : "",
+    confirm: typeof confirm === "string" ? confirm : "",
   });
 
   if (!result.ok) {

@@ -6,10 +6,17 @@ import { getPool } from "../db/pool";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Aligned with frontend `strongPasswordValidator`. */
+const STRONG_PASSWORD_MIN_LENGTH = 8;
+const STRONG_PASSWORD_MAX_LENGTH = 15;
+const STRONG_PASSWORD_SPECIAL_RE =
+  /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/;
+
 export interface RegisterInput {
   name: string;
   email: string;
   password: string;
+  confirm: string;
 }
 
 export interface LoginInput {
@@ -27,23 +34,62 @@ export type AuthResult =
   | { ok: true; user: PublicUser; token?: string }
   | { ok: false; code: string; message: string };
 
+function validateStrongPassword(password: string): string | null {
+  const v = password;
+  const issues: string[] = [];
+  if (v.length < STRONG_PASSWORD_MIN_LENGTH) {
+    issues.push(`at least ${STRONG_PASSWORD_MIN_LENGTH} characters`);
+  }
+  if (v.length > STRONG_PASSWORD_MAX_LENGTH) {
+    issues.push(`at most ${STRONG_PASSWORD_MAX_LENGTH} characters`);
+  }
+  if (!/[a-z]/.test(v)) issues.push("one lowercase letter");
+  if (!/[A-Z]/.test(v)) issues.push("one uppercase letter");
+  if (!/\d/.test(v)) issues.push("one digit");
+  if (!STRONG_PASSWORD_SPECIAL_RE.test(v)) {
+    issues.push(
+      "one special character (!@#$%^&*()_+-=[]{}|;':\",./<>?`~ etc.)",
+    );
+  }
+  if (issues.length === 0) return null;
+  return `Password must include ${issues.join(", ")}.`;
+}
+
 function validateRegister(input: RegisterInput): string | null {
-  if (!input.name?.trim()) return "Name is required";
-  if (input.name.length > 200) return "Name is too long";
+  const nameTrimmed = input.name?.trim() ?? "";
+  if (!nameTrimmed) return "Name is required";
+  if (nameTrimmed.length < 2) return "Name must be at least 2 characters";
+  if (nameTrimmed.length > 200) return "Name is too long";
+
   if (!input.email?.trim()) return "Email is required";
   if (!EMAIL_REGEX.test(input.email.trim().toLowerCase())) {
     return "Invalid email format";
   }
-  if (!input.password || input.password.length < 8) {
-    return "Password must be at least 8 characters";
+
+  if (input.password == null || input.password === "") {
+    return "Password is required";
   }
-  if (input.password.length > 128) return "Password is too long";
+  const pwdErr = validateStrongPassword(input.password);
+  if (pwdErr) return pwdErr;
+
+  if (input.confirm == null || input.confirm === "") {
+    return "Confirm password is required";
+  }
+  if (input.password !== input.confirm) {
+    return "Passwords do not match";
+  }
+
   return null;
 }
 
 function validateLogin(input: LoginInput): string | null {
   if (!input.email?.trim()) return "Email is required";
-  if (!input.password) return "Password is required";
+  if (!EMAIL_REGEX.test(input.email.trim().toLowerCase())) {
+    return "Invalid email format";
+  }
+  if (input.password == null || input.password === "") {
+    return "Password is required";
+  }
   return null;
 }
 
