@@ -1,4 +1,5 @@
 import type { Salary } from "../db/types";
+import { salaryGross, salaryNetEstimate } from "./payroll.service";
 
 export interface RagHit {
   id: string;
@@ -23,10 +24,16 @@ export class RagService {
     userId: string,
     records: Salary[],
   ): Promise<void> {
-    const salaryDocs: StoredDoc[] = records.map((r, i) => ({
-      id: `salary-${r.month}-${i}`,
-      text: `Payslip context ${r.month}: Basic INR ${r.basic}, HRA INR ${r.hra}, TDS/Tax INR ${r.tax}, PF INR ${r.pf}. Gross (basic+hra) INR ${r.basic + r.hra}. Estimated net after tax and PF INR ${r.basic + r.hra - r.tax - r.pf}.`,
-    }));
+    const salaryDocs: StoredDoc[] = records.map((r, i) => {
+      const g = salaryGross(r);
+      const n = salaryNetEstimate(r);
+      const inr = (v: number | null) =>
+        v == null ? "n/a" : `INR ${v}`;
+      return {
+        id: `salary-${r.month}-${i}`,
+        text: `Payslip context ${r.month}: Basic ${inr(r.basic)}, HRA ${inr(r.hra)}, TDS ${inr(r.tax)}, PF ${inr(r.pf)}. Gross ${inr(g)}. Net estimate ${inr(n)}.`,
+      };
+    });
     this.store.set(userId, salaryDocs);
   }
 

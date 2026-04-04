@@ -4,7 +4,7 @@ import type {
 } from "openai/resources/chat/completions";
 import { AGENT_SYSTEM_PROMPT } from "../utils/prompt";
 import { createChatCompletion } from "../utils/llm";
-import { payrollService } from "./payroll.service";
+import { payrollService, salaryGross, salaryNetEstimate } from "./payroll.service";
 import { ragService } from "./rag.service";
 import { parseToolName, toolService } from "./tool.service";
 
@@ -105,12 +105,21 @@ export class AgentService {
           : JSON.stringify(
               records.map((r) => ({
                 month: r.month,
+                year: r.year,
                 basic: r.basic,
                 hra: r.hra,
                 tax: r.tax,
                 pf: r.pf,
-                gross_basic_hra: r.basic + r.hra,
-                net_estimate: r.basic + r.hra - r.tax - r.pf,
+                total_earnings: r.totalEarnings,
+                net_pay: r.netPay,
+                total_deductions: r.totalDeductions,
+                special_allowance: r.specialAllowance,
+                statutory_bonus: r.statutoryBonus,
+                mobile_allowance: r.mobileAllowance,
+                wellness_allowance: r.wellnessAllowance,
+                total_reimbursements: r.totalReimbursements,
+                gross: salaryGross(r),
+                net_estimate: salaryNetEstimate(r),
               })),
               null,
               2,

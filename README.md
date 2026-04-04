@@ -60,7 +60,7 @@ Server listens on `APP_PORT` (default `3000`; Cloud Run’s `PORT` is used as fa
 | GET | `/ping` | — | UI online check (`{ "ok": true }`, `Cache-Control: no-store`) |
 | POST | `/auth/register` | `{ "name", "email", "password" }` | Create user (password hashed with bcrypt) |
 | POST | `/auth/login` | `{ "email", "password" }` | Login; returns `user` and optional `token` if `JWT_SECRET` is set |
-| POST | `/agent/query` | JSON or multipart | Run the agent (`Authorization: Bearer <jwt>` required; `userId` taken from token) |
+| POST | `/agent/query` | JSON or multipart | Run the agent (`Authorization: Bearer <jwt>` required; `userId` taken from token). Appends user + assistant rows to `chat_history`; response includes `sessionId` (UUID). Send the same `sessionId` on later turns to group the conversation. |
 | POST | `/feedback` | See below | Store chat feedback (requires `Authorization: Bearer <jwt>`) |
 | POST | `/agent/feedback` | See below | Same as `/feedback` |
 | POST | `/agent/payslip/signed-upload` | `{ "userId", "filename", "contentType" }` | GCS signed URL (when bucket configured) |
@@ -90,6 +90,8 @@ curl -s -X POST http://localhost:3000/agent/query \
   -d '{"query":"Compare my salary for 2025-03 vs 2025-04"}'
 ```
 
+The JSON response includes `sessionId`. For follow-up messages in the same chat, add `"sessionId":"<that-uuid>"` to the body.
+
 **Chat feedback** (`POST /feedback` or `POST /agent/feedback`)
 
 Body (JSON): `query` and `response` are required (user message and assistant reply). Optional: `userId`, `rating` (integer 1–5), `comment` (string, max 4000 chars). Returns `201` with `{ "success": true, "id": <number>, "ok": true }`.
@@ -105,22 +107,21 @@ Existing databases created before `user_id` / `comment` columns: run `sql/migrat
 
 Registration can take a moment because of **bcrypt** hashing; lower `BCRYPT_ROUNDS` in `.env` for faster local dev only (not for production).
 
-## Python stubs (optional)
+## Python parse stub (optional)
 
-If the Python services are not running, tool calls `calculate_tax` and `parse_salary_slip` return structured errors; the LLM explains the failure without inventing numbers.
+`calculate_tax` runs in-process via `src/services/tax.service.ts` (FY 2025–26 slabs; no Python tax service).
 
-Minimal FastAPI examples:
+If the Python parse service is not running, `parse_salary_slip` may return structured errors when the text-only path is used without Document AI; the LLM can explain the failure without inventing numbers.
 
-**Tax (`:8001`):** accept JSON body with `annual_gross`, `regime` and return JSON with estimated tax.
-
-**Parse (`:8000`):** accept JSON `{ "text": "..." }` and return extracted fields as JSON.
+Minimal FastAPI example for **parse (`:8000`):** accept JSON `{ "text": "..." }` and return extracted fields as JSON.
 
 ## Project layout
 
 - `src/services/agent.service.ts` — agent loop (payroll → RAG → LLM → tools)
+- `src/services/chat-history.service.ts` — append-only `chat_history` rows for `/agent/query`
 - `src/services/tool.service.ts` — tool execution (Axios + SQL)
 - `src/utils/llm/` — OpenAI / Vertex Gemini completions + tool definitions
 - `src/utils/prompt.ts` — system prompts
 - `src/services/auth.service.ts` — register / login (bcrypt + optional JWT)
-- `sql/schema.sql` — `users`, `Salary`, `Feedback` tables
+- `sql/schema.sql` — `users`, `salaries`, `chat_history`, `Feedback` tables
 - `src/db/pool.ts` — shared `pg` connection pool

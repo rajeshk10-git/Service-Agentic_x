@@ -1,5 +1,7 @@
 import axios, { AxiosError } from "axios";
 import { env } from "../config/env";
+import type { Deductions } from "./tax.service";
+import { taxService } from "./tax.service";
 import {
   canProcessPayslipFromBytes,
   isDocumentAiConfigured,
@@ -111,18 +113,42 @@ export class ToolService {
 
   private async calculateTax(args: CalculateTaxArgs): Promise<unknown> {
     try {
-      const url = `${env.PYTHON_TAX_SERVICE_URL.replace(/\/$/, "")}/calculate`;
-      const { data } = await axios.post(url, args, {
-        timeout: 30_000,
-        headers: { "Content-Type": "application/json" },
-        validateStatus: () => true,
-      });
-      if (typeof data === "object" && data !== null && "error" in data) {
-        return data;
+      if (
+        typeof args.annual_gross !== "number" ||
+        Number.isNaN(args.annual_gross) ||
+        args.annual_gross < 0
+      ) {
+        return {
+          error: true,
+          message: "annual_gross must be a non-negative number",
+        };
       }
-      return data;
+      const deductions: Deductions = {
+        standardDeduction: args.standard_deduction,
+        section80C: args.section_80c,
+        section80D: args.section_80d,
+        hra: args.hra,
+        lta: args.lta,
+        housingLoanInterest: args.housing_loan_interest,
+        other: args.other,
+      };
+      const result = taxService.calculateTax(
+        args.annual_gross,
+        deductions,
+        args.regime,
+      );
+      return {
+        ...result,
+        source: "tax_service",
+        financial_year: "2025-26",
+        note: "Indicative only; verify with a qualified tax advisor.",
+      };
     } catch (err) {
-      return this.formatAxiosError("calculate_tax", err);
+      return {
+        error: true,
+        tool: "calculate_tax",
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 

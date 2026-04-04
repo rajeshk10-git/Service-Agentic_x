@@ -8,23 +8,31 @@ async function main(): Promise<void> {
   }
   const pool = new pg.Pool({ connectionString: url });
   try {
-    await pool.query(`DELETE FROM "Salary" WHERE "userId" = $1`, ["demo-user"]);
+    await pool.query(`DELETE FROM salaries WHERE user_id = $1`, ["demo-user"]);
     await pool.query(
-      `INSERT INTO "Salary" ("userId", month, basic, hra, tax, pf) VALUES
-       ($1, $2, $3, $4, $5, $6),
-       ($1, $7, $8, $9, $10, $11)`,
+      `INSERT INTO salaries (
+        user_id, year, month,
+        basic, hra, income_tax_tds, employee_pf,
+        total_earnings, net_pay, total_deductions
+      ) VALUES
+       ($1, 2025, 3, $2, $3, $4, $5, $6, $7, $8),
+       ($1, 2025, 4, $9, $10, $11, $12, $13, $14, $15)`,
       [
         "demo-user",
-        "2025-03",
         50000,
         20000,
         12000,
         6000,
-        "2025-04",
+        70000,
+        52000,
+        18000,
         52000,
         20800,
         12800,
         6240,
+        72800,
+        53760,
+        19040,
       ],
     );
     console.log("Seeded demo-user salary rows.");

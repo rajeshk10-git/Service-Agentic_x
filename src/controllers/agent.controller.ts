@@ -1,14 +1,19 @@
+import { randomUUID } from "crypto";
 import type { Request, Response } from "express";
 import { getPool } from "../db/pool";
 import {
   agentService,
   type RunAgentPayslipFile,
 } from "../services/agent.service";
+import { chatHistoryService } from "../services/chat-history.service";
 
 /**
  * POST /agent/query JSON body (application/json).
  * Optional multipart: field `payslip` file instead of payslipBase64.
  */
+const SESSION_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export interface AgentQueryJsonBody {
   /** Set by `requireJwtUserId` from JWT `sub`; may be omitted in JSON when using Bearer auth. */
   userId: string;
@@ -18,6 +23,11 @@ export interface AgentQueryJsonBody {
   payslipMimeType?: string;
   /** Base64-encoded payslip bytes (no data: URL prefix). */
   payslipBase64?: string;
+  /**
+   * Client-supplied UUID to group turns in one conversation. Omit to start a new session
+   * (server returns a new `sessionId` in the response).
+   */
+  sessionId?: string;
 }
 
 const FEEDBACK_COMMENT_MAX = 4000;
@@ -88,6 +98,7 @@ function payslipFileFromJsonBody(
 }
 
 export async function postAgentQuery(req: Request, res: Response): Promise<void> {
+  let sessionId: string | undefined;
   try {
     const raw = req.body;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -143,16 +154,64 @@ export async function postAgentQuery(req: Request, res: Response): Promise<void>
       query = DEFAULT_QUERY_WITH_PAYSLIP_ONLY;
     }
 
-    const result = await agentService.runAgent({
+    const sessionIdRaw = getTrimmedField(record, "sessionId");
+    if (sessionIdRaw) {
+      if (!SESSION_UUID_RE.test(sessionIdRaw)) {
+        res.status(400).json({
+          success: false,
+          error:
+            "sessionId must be a valid UUID (RFC 4122) when provided, to group chat turns.",
+        });
+        return;
+      }
+      sessionId = sessionIdRaw;
+    } else {
+      sessionId = randomUUID();
+    }
+
+    await chatHistoryService.append({
       userId: userIdRaw,
-      query,
-      ...(payslipFile ? { payslipFile } : {}),
+      sessionId,
+      role: "user",
+      message: query,
+    });
+
+    let result: Awaited<ReturnType<typeof agentService.runAgent>>;
+    try {
+      result = await agentService.runAgent({
+        userId: userIdRaw,
+        query,
+        ...(payslipFile ? { payslipFile } : {}),
+      });
+    } catch (agentErr) {
+      const msg =
+        agentErr instanceof Error ? agentErr.message : String(agentErr);
+      await chatHistoryService.append({
+        userId: userIdRaw,
+        sessionId,
+        role: "assistant",
+        message: `Summary:\nThe agent failed before completing.\n\nBreakdown:\n${msg}\n\nRecommendation:\nRetry or check server logs.`,
+      });
+      res.status(500).json({
+        success: false,
+        error: msg,
+        sessionId,
+      });
+      return;
+    }
+
+    await chatHistoryService.append({
+      userId: userIdRaw,
+      sessionId,
+      role: "assistant",
+      message: result.response,
     });
 
     const status = result.success ? 200 : 502;
     res.status(status).json({
       success: result.success,
       response: result.response,
+      sessionId,
       toolsUsed: result.toolsUsed,
       ...(result.payslipParse !== undefined
         ? { payslipParse: result.payslipParse }
@@ -164,6 +223,7 @@ export async function postAgentQuery(req: Request, res: Response): Promise<void>
     res.status(500).json({
       success: false,
       error: message,
+      ...(sessionId ? { sessionId } : {}),
     });
   }
 }

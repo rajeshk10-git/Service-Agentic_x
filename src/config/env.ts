@@ -79,8 +79,6 @@ export const env = {
   LLM_PROVIDER: llmProvider,
   OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
   OPENAI_MODEL: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
-  PYTHON_TAX_SERVICE_URL:
-    process.env.PYTHON_TAX_SERVICE_URL ?? "http://localhost:8001",
   PYTHON_PARSE_SERVICE_URL:
     process.env.PYTHON_PARSE_SERVICE_URL ?? "http://localhost:8000",
 

@@ -8,110 +8,251 @@ export interface SalaryComparison {
   month_a_record: Salary;
   month_b_record: Salary;
   deltas: {
-    basic: number;
-    hra: number;
-    tax: number;
-    pf: number;
-    gross: number;
-    net_estimate: number;
+    basic: number | null;
+    hra: number | null;
+    tax: number | null;
+    pf: number | null;
+    gross: number | null;
+    net_estimate: number | null;
   };
 }
 
-function mapSalary(r: {
-  id: unknown;
-  user_id: unknown;
-  month: unknown;
-  basic: unknown;
-  hra: unknown;
-  tax: unknown;
-  pf: unknown;
-}): SalaryRow {
+const SALARY_SELECT = `
+  SELECT
+    salary_id AS id,
+    user_id,
+    year,
+    month AS calendar_month,
+    (year::text || '-' || lpad(month::text, 2, '0')) AS month,
+    effective_work_days,
+    days_in_month,
+    lop,
+    basic,
+    hra,
+    special_allowance,
+    statutory_bonus,
+    mobile_allowance,
+    wellness_allowance,
+    employee_pf AS pf,
+    total_deductions,
+    income_tax_tds AS tax,
+    total_earnings,
+    net_pay,
+    medical_reimbursement,
+    petrol_reimbursement,
+    internet_reimbursement,
+    meal_voucher_reversal,
+    meal_reimbursement,
+    total_reimbursements,
+    created_at
+  FROM salaries
+`;
+
+function n(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "string" && v.trim() === "") return null;
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
+}
+
+function ni(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
+}
+
+function mapSalary(r: Record<string, unknown>): SalaryRow {
   return {
     id: Number(r.id),
     userId: String(r.user_id),
+    year: Number(r.year),
+    calendarMonth: Number(r.calendar_month),
     month: String(r.month),
-    basic: Number(r.basic),
-    hra: Number(r.hra),
-    tax: Number(r.tax),
-    pf: Number(r.pf),
+    effectiveWorkDays: ni(r.effective_work_days),
+    daysInMonth: ni(r.days_in_month),
+    lop: ni(r.lop),
+    basic: n(r.basic),
+    hra: n(r.hra),
+    specialAllowance: n(r.special_allowance),
+    statutoryBonus: n(r.statutory_bonus),
+    mobileAllowance: n(r.mobile_allowance),
+    wellnessAllowance: n(r.wellness_allowance),
+    pf: n(r.pf),
+    totalDeductions: n(r.total_deductions),
+    tax: n(r.tax),
+    totalEarnings: n(r.total_earnings),
+    netPay: n(r.net_pay),
+    medicalReimbursement: n(r.medical_reimbursement),
+    petrolReimbursement: n(r.petrol_reimbursement),
+    internetReimbursement: n(r.internet_reimbursement),
+    mealVoucherReversal: n(r.meal_voucher_reversal),
+    mealReimbursement: n(r.meal_reimbursement),
+    totalReimbursements: n(r.total_reimbursements),
+    createdAt:
+      r.created_at instanceof Date
+        ? r.created_at.toISOString()
+        : r.created_at != null
+          ? String(r.created_at)
+          : null,
   };
 }
 
-function grossNet(s: Salary): { gross: number; net_estimate: number } {
-  const gross = s.basic + s.hra;
-  const net_estimate = gross - s.tax - s.pf;
-  return { gross, net_estimate };
+function parseMonthKey(key: string): { y: number; m: number } | null {
+  const t = key.trim();
+  const m = /^(\d{4})-(\d{1,2})$/.exec(t);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  if (mo < 1 || mo > 12) return null;
+  return { y, m: mo };
+}
+
+function deltaNullable(a: number | null, b: number | null): number | null {
+  if (a == null || b == null) return null;
+  return b - a;
+}
+
+/** Gross: prefers total_earnings; else sums known earning components (null parts treated as 0 only when at least one earning exists). */
+export function salaryGross(s: Salary): number | null {
+  if (s.totalEarnings != null) return s.totalEarnings;
+  const parts = [
+    s.basic,
+    s.hra,
+    s.specialAllowance,
+    s.statutoryBonus,
+    s.mobileAllowance,
+    s.wellnessAllowance,
+  ];
+  if (parts.every((x) => x == null)) return null;
+  let sum = 0;
+  for (const x of parts) sum += x ?? 0;
+  return sum;
+}
+
+/** Net: prefers net_pay; else gross minus deductions when enough is known. */
+export function salaryNetEstimate(s: Salary): number | null {
+  if (s.netPay != null) return s.netPay;
+  const g = salaryGross(s);
+  if (g == null) return null;
+  if (s.totalDeductions != null) return Math.max(g - s.totalDeductions, 0);
+  if (s.tax == null && s.pf == null) return null;
+  return Math.max(g - (s.tax ?? 0) - (s.pf ?? 0), 0);
+}
+
+function grossNet(s: Salary): {
+  gross: number | null;
+  net_estimate: number | null;
+} {
+  return { gross: salaryGross(s), net_estimate: salaryNetEstimate(s) };
 }
 
 export class PayrollService {
   async getSalaryByUserId(userId: string): Promise<Salary[]> {
     const pool = getPool();
     const { rows } = await pool.query(
-      `SELECT id, "userId" AS user_id, month, basic, hra, tax, pf
-       FROM "Salary"
-       WHERE "userId" = $1
-       ORDER BY month ASC`,
+      `${SALARY_SELECT}
+       WHERE user_id = $1
+       ORDER BY year ASC, month ASC`,
       [userId],
     );
-    return rows.map((r) => mapSalary(r));
+    return rows.map((r) => mapSalary(r as Record<string, unknown>));
   }
 
   async getSalaryByMonth(
     userId: string,
-    month: string,
+    monthKey: string,
   ): Promise<Salary | null> {
+    const parsed = parseMonthKey(monthKey);
+    if (!parsed) return null;
     const pool = getPool();
     const { rows } = await pool.query(
-      `SELECT id, "userId" AS user_id, month, basic, hra, tax, pf
-       FROM "Salary"
-       WHERE "userId" = $1 AND month = $2
+      `${SALARY_SELECT}
+       WHERE user_id = $1 AND year = $2 AND month = $3
        LIMIT 1`,
-      [userId, month],
+      [userId, parsed.y, parsed.m],
     );
-    return rows[0] ? mapSalary(rows[0]) : null;
+    return rows[0] ? mapSalary(rows[0] as Record<string, unknown>) : null;
   }
 
   /**
-   * Upsert a `Salary` row from payslip extraction (month YYYY-MM + basic required).
+   * Upsert from payslip extraction. Unknown fields stay NULL; existing row values are kept on conflict when new value is NULL.
    */
   async upsertSalaryFromExtract(
     userId: string,
     extracted: DocumentAiPayslipExtracted,
   ): Promise<{ saved: boolean; salary?: Salary }> {
-    const month = extracted.month;
+    const monthKey = extracted.month;
     const basic = extracted.basic;
-    if (!month || basic == null || Number.isNaN(basic)) {
+    if (!monthKey || basic == null || Number.isNaN(basic)) {
       return { saved: false };
     }
-    const hra = extracted.hra ?? 0;
-    const tax = extracted.tax ?? 0;
-    const pf = extracted.pf ?? 0;
+    const parsed = parseMonthKey(monthKey);
+    if (!parsed) return { saved: false };
+
+    const hra = extracted.hra ?? null;
+    const tax = extracted.tax ?? null;
+    const pf = extracted.pf ?? null;
+    const totalEarnings = extracted.grossEarnings ?? null;
+    const netPay = extracted.netPay ?? null;
+    const totalDeductions =
+      tax != null && pf != null ? tax + pf : null;
 
     const pool = getPool();
-    const existing = await pool.query(
-      `SELECT id FROM "Salary" WHERE "userId" = $1 AND month = $2 LIMIT 1`,
-      [userId, month],
-    );
-
-    if (existing.rows[0]) {
-      const id = existing.rows[0].id as number;
-      const { rows } = await pool.query(
-        `UPDATE "Salary"
-         SET basic = $1, hra = $2, tax = $3, pf = $4
-         WHERE id = $5
-         RETURNING id, "userId" AS user_id, month, basic, hra, tax, pf`,
-        [basic, hra, tax, pf, id],
-      );
-      return { saved: true, salary: mapSalary(rows[0]) };
-    }
-
     const { rows } = await pool.query(
-      `INSERT INTO "Salary" ("userId", month, basic, hra, tax, pf)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, "userId" AS user_id, month, basic, hra, tax, pf`,
-      [userId, month, basic, hra, tax, pf],
+      `INSERT INTO salaries (
+        user_id, year, month,
+        basic, hra, employee_pf, income_tax_tds,
+        total_earnings, net_pay, total_deductions
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (user_id, year, month) DO UPDATE SET
+        basic = COALESCE(EXCLUDED.basic, salaries.basic),
+        hra = COALESCE(EXCLUDED.hra, salaries.hra),
+        employee_pf = COALESCE(EXCLUDED.employee_pf, salaries.employee_pf),
+        income_tax_tds = COALESCE(EXCLUDED.income_tax_tds, salaries.income_tax_tds),
+        total_earnings = COALESCE(EXCLUDED.total_earnings, salaries.total_earnings),
+        net_pay = COALESCE(EXCLUDED.net_pay, salaries.net_pay),
+        total_deductions = COALESCE(EXCLUDED.total_deductions, salaries.total_deductions)
+      RETURNING
+        salary_id AS id,
+        user_id,
+        year,
+        month AS calendar_month,
+        (year::text || '-' || lpad(month::text, 2, '0')) AS month,
+        effective_work_days,
+        days_in_month,
+        lop,
+        basic,
+        hra,
+        special_allowance,
+        statutory_bonus,
+        mobile_allowance,
+        wellness_allowance,
+        employee_pf AS pf,
+        total_deductions,
+        income_tax_tds AS tax,
+        total_earnings,
+        net_pay,
+        medical_reimbursement,
+        petrol_reimbursement,
+        internet_reimbursement,
+        meal_voucher_reversal,
+        meal_reimbursement,
+        total_reimbursements,
+        created_at`,
+      [
+        userId,
+        parsed.y,
+        parsed.m,
+        basic,
+        hra,
+        pf,
+        tax,
+        totalEarnings,
+        netPay,
+        totalDeductions,
+      ],
     );
-    return { saved: true, salary: mapSalary(rows[0]) };
+    return { saved: true, salary: mapSalary(rows[0] as Record<string, unknown>) };
   }
 
   async compareTwoMonths(
@@ -140,12 +281,12 @@ export class PayrollService {
       month_a_record: a,
       month_b_record: b,
       deltas: {
-        basic: b.basic - a.basic,
-        hra: b.hra - a.hra,
-        tax: b.tax - a.tax,
-        pf: b.pf - a.pf,
-        gross: gb.gross - ga.gross,
-        net_estimate: gb.net_estimate - ga.net_estimate,
+        basic: deltaNullable(a.basic, b.basic),
+        hra: deltaNullable(a.hra, b.hra),
+        tax: deltaNullable(a.tax, b.tax),
+        pf: deltaNullable(a.pf, b.pf),
+        gross: deltaNullable(ga.gross, gb.gross),
+        net_estimate: deltaNullable(ga.net_estimate, gb.net_estimate),
       },
     };
   }

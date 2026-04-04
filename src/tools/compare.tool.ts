@@ -5,7 +5,7 @@ export const compareToolDefinition: ChatCompletionTool = {
   function: {
     name: "compare_salary",
     description:
-      "Compare two payroll months for the same user from the database (basic, HRA, tax, PF, gross, net estimate).",
+      "Compare two payroll months for the same user from the database (basic, HRA, tax, PF, gross, net estimate). Delta fields may be null when a value is missing for one month (org-specific payslip shape).",
     parameters: {
       type: "object",
       properties: {
